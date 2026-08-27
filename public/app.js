@@ -27,7 +27,7 @@ const speakerButton = document.getElementById('speakerButton');
 const remoteAudio = document.getElementById('remoteAudio');
 const ringtone = document.getElementById('ringtone');
 
-let myId = localStorage.getItem('zero-test-id');
+let myId = null;
 let peerId = null;
 let ws = null;
 let pc = null;
@@ -37,6 +37,7 @@ let pendingOffer = null;
 let callStartedAt = null;
 let timerHandle = null;
 let isMuted = false;
+let ringtoneUnlocked = false;
 
 const rtcConfig = {
   iceServers: [
@@ -50,7 +51,26 @@ function showScreen(name) {
   screens[name].classList.add('active');
 }
 
-function setIdentity(id) {
+async function unlockRingtone() {
+  if (ringtoneUnlocked) return;
+  const oldMuted = ringtone.muted;
+  ringtone.muted = true;
+  ringtone.volume = 1;
+  ringtone.currentTime = 0;
+  try {
+    await ringtone.play();
+    ringtone.pause();
+    ringtone.currentTime = 0;
+    ringtoneUnlocked = true;
+  } catch (e) {
+    console.warn('Ringtone unlock failed', e);
+  } finally {
+    ringtone.muted = oldMuted;
+  }
+}
+
+async function setIdentity(id) {
+  await unlockRingtone();
   myId = id;
   localStorage.setItem('zero-test-id', id);
   peerId = id === '1001' ? '1002' : '1001';
@@ -83,8 +103,15 @@ function connectSignal() {
       pendingOffer = msg.offer;
       incomingId.textContent = `ID ${currentPeer}`;
       showScreen('incoming');
+      ringtone.pause();
       ringtone.currentTime = 0;
-      ringtone.play().catch(() => {});
+      ringtone.muted = false;
+      ringtone.volume = 1;
+      try {
+        await ringtone.play();
+      } catch (e) {
+        console.warn('Incoming ringtone blocked', e);
+      }
     }
     if (msg.type === 'answer') {
       if (!pc) return;
@@ -105,7 +132,10 @@ function connectSignal() {
 
 async function getMic() {
   if (!localStream) {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false
+    });
   }
   return localStream;
 }
@@ -153,6 +183,7 @@ async function startCall() {
 
 async function answerCall() {
   ringtone.pause();
+  ringtone.currentTime = 0;
   activeId.textContent = `ID ${currentPeer}`;
   activeStatus.textContent = 'CONNECTING...';
   showScreen('active');
@@ -171,6 +202,7 @@ async function answerCall() {
 
 function declineCall() {
   ringtone.pause();
+  ringtone.currentTime = 0;
   send('decline');
   resetCall('DECLINED');
 }
@@ -194,7 +226,9 @@ function resetCall(label = 'TAP TO CALL') {
   peerButton.classList.remove('calling');
   peerStateLabel.textContent = label;
   showScreen('home');
-  setTimeout(() => { if (peerStateLabel.textContent === label) peerStateLabel.textContent = 'TAP TO CALL'; }, 1600);
+  setTimeout(() => {
+    if (peerStateLabel.textContent === label) peerStateLabel.textContent = 'TAP TO CALL';
+  }, 1600);
 }
 
 function startTimer() {
@@ -227,9 +261,12 @@ declineButton.addEventListener('click', declineCall);
 endButton.addEventListener('click', hangup);
 muteButton.addEventListener('click', toggleMute);
 speakerButton.addEventListener('click', toggleSpeaker);
-document.querySelectorAll('.setup-choice').forEach(btn => btn.addEventListener('click', () => setIdentity(btn.dataset.id)));
+document.querySelectorAll('.setup-choice').forEach(btn => {
+  btn.addEventListener('click', () => setIdentity(btn.dataset.id));
+});
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
-if (myId === '1001' || myId === '1002') setIdentity(myId);
-else showScreen('setup');
+// For this two-phone test we deliberately require one tap after every fresh load.
+// That user gesture unlocks audio so the ZERO ringtone can play on incoming calls.
+showScreen('setup');
